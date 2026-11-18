@@ -39,6 +39,75 @@ from ..common import WARN, Issue, iou_xywh, parse_yolo_line  # noqa: F401
 from ..model_cache import get_preds  # noqa: F401
 
 
+def _labels_with_lines(ds, stem):
+    """[(số dòng gốc, cls, cx, cy, w, h)] của các dòng hợp lệ. Dòng trống/hỏng bị bỏ nhưng vẫn đếm số dòng."""
+    out = []
+    for n, raw in ds.read_label_lines(stem):
+        if not raw.strip():
+            continue
+        try:
+            cls, x, y, w, h = parse_yolo_line(raw)
+        except ValueError:
+            continue
+        if not (0 <= int(cls) < len(ds.classes)) or w <= 0 or h <= 0:
+            continue
+        out.append((n, int(cls), x, y, w, h))
+    return out
+
+
 def run(ds, cfg, preds=None):
-    # TODO
-    raise NotImplementedError("check second_opinion chưa làm")
+    c = cfg["second_opinion"]
+    if preds is None:
+        preds = get_preds(ds, cfg, "checker")
+    issues = []
+
+    for img in ds.image_files():
+        stem = img.stem
+        if stem not in preds or not ds.label_path(stem).exists():
+            continue
+        try:
+            W, H = ds.image_size(stem)
+        except Exception:
+            continue                                   # ảnh hỏng: việc của check `images`
+
+        labels = _labels_with_lines(ds, stem)
+        P = [r for r in preds[stem]
+             if r[1] >= c["conf"] and (r[4] * W) * (r[5] * H) >= c["min_area_px"]]
+
+        # 1. Mỗi dự đoán sinh tối đa MỘT issue
+        for r in P:
+            rcls, rconf, rbox = int(r[0]), r[1], tuple(r[2:6])
+            cands = []                                 # (iou, lớp nhãn)
+            for _, lcls, x, y, w, h in labels:
+                iou = iou_xywh(rbox, (x, y, w, h))
+                if iou >= c["iou_missing"]:
+                    cands.append((iou, lcls))
+
+            if not cands:
+                issues.append(Issue("second_opinion", WARN, "POSSIBLE_MISSING", stem,
+                                    f"model thấy lớp {rcls} (conf {rconf:.2f}) mà nhãn không có box",
+                                    None, {"conf": rconf}))
+                continue
+            same = [i for i, lc in cands if lc == rcls]
+            if same:
+                best = max(same)
+                if best < c["iou_loose"]:
+                    issues.append(Issue("second_opinion", WARN, "POSSIBLE_LOOSE_BOX", stem,
+                                        f"box đúng lớp nhưng lỏng/lệch (IoU {best:.2f})",
+                                        None, {"conf": rconf, "iou": best}))
+                continue                               # nhãn đúng lớp đã phủ vật này
+            best_other = max(i for i, _ in cands)
+            if best_other >= c["iou_match"]:
+                issues.append(Issue("second_opinion", WARN, "POSSIBLE_WRONG_CLASS", stem,
+                                    f"model nói lớp {rcls} (conf {rconf:.2f}), nhãn khác lớp (IoU {best_other:.2f})",
+                                    None, {"conf": rconf, "iou": best_other}))
+            # còn lại: mơ hồ, không cờ
+
+        # 2. FALSE_POS: dùng fp_conf, KHÔNG lọc diện tích
+        fp_preds = [r for r in preds[stem] if r[1] >= c["fp_conf"]]
+        for n, lcls, x, y, w, h in labels:
+            if all(iou_xywh(tuple(r[2:6]), (x, y, w, h)) < c["iou_missing"] for r in fp_preds):
+                issues.append(Issue("second_opinion", WARN, "POSSIBLE_FALSE_POS", stem,
+                                    f"box nhãn dòng {n} không khớp vật nào model thấy",
+                                    n, {"iou": 0.0}))
+    return issues

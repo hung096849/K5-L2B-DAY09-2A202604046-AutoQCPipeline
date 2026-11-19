@@ -1,0 +1,18 @@
+{
+  "verdict": {
+    "decision": "Hold",
+    "n_errors": 0,
+    "n_warn_images": 38,
+    "n_images": 203,
+    "warn_ratio": 0.1872,
+    "reasons": [
+      "38/203 ảnh còn cảnh báo (18.7%), đạt hoặc vượt ngưỡng 10%: giữ lại chờ người duyệt thêm."
+    ]
+  },
+  "reviewed": 80,
+  "budget": 80,
+  "seconds": 2.3,
+  "exported": "/Users/hoangmanhhung/Downloads/K5-L2B-DAY09-2A202604046-AutoQCPipeline/submission/export/clean_v1",
+  "config_sha1": "a8cfaa406b4b58350cb63d319cd0b08bfa2b4a4b",
+  "review_sim_sha1": "7988ca22827f780a7043a2300490e679a1697154"
+}
